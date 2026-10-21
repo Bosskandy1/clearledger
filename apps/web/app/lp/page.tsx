@@ -69,6 +69,10 @@ export default function LPDashboard() {
   const [simDetails, setSimDetails] = useState<SimulationResult | null>(null);
   const [simError, setSimError] = useState<string | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [withdrawSimDetails, setWithdrawSimDetails] =
+    useState<SimulationResult | null>(null);
+  const [withdrawSimError, setWithdrawSimError] = useState<string | null>(null);
+  const [isWithdrawSimulating, setIsWithdrawSimulating] = useState(false);
 
   useEffect(() => {
     const amount = Number(depositAmount);
@@ -111,6 +115,49 @@ export default function LPDashboard() {
     };
   }, [address, depositAmount]);
 
+  useEffect(() => {
+    const shares = Number(withdrawShares);
+    if (!address || !Number.isFinite(shares) || shares <= 0) {
+      setWithdrawSimDetails(null);
+      setWithdrawSimError(null);
+      setIsWithdrawSimulating(false);
+      return;
+    }
+
+    setWithdrawSimDetails(null);
+    let active = true;
+    const timer = setTimeout(async () => {
+      setIsWithdrawSimulating(true);
+      setWithdrawSimError(null);
+      try {
+        const shareStroops = BigInt(Math.floor(shares * STROOPS_PER_UNIT));
+        const client = new PoolClient(poolContractID);
+        const result = await client.simulateTransaction(
+          "withdraw",
+          [
+            new Address(address).toScVal(),
+            nativeToScVal(shareStroops, { type: "u128" }),
+          ],
+          address,
+        );
+        if (active) setWithdrawSimDetails(result);
+      } catch (error) {
+        if (active) {
+          setWithdrawSimError(
+            error instanceof Error ? error.message : "Simulation failed",
+          );
+        }
+      } finally {
+        if (active) setIsWithdrawSimulating(false);
+      }
+    }, 400);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [address, withdrawShares]);
+
   if (!connected) {
     return (
       <PageLayout>
@@ -136,6 +183,7 @@ export default function LPDashboard() {
 
   const handleWithdraw = (event: React.FormEvent) => {
     event.preventDefault();
+    if (isWithdrawSimulating || withdrawSimError || !withdrawSimDetails) return;
     const shares = Number(withdrawShares);
     if (!Number.isFinite(shares) || shares <= 0) return;
 
@@ -347,6 +395,11 @@ export default function LPDashboard() {
             <p className="text-xs text-slate-500">
               Available: {formatShareValue(position?.shares)}
             </p>
+            <SimulationPreview
+              details={withdrawSimDetails}
+              error={withdrawSimError}
+              isLoading={isWithdrawSimulating}
+            />
             <div className="space-y-1 rounded border border-border/60 bg-slate-950/60 p-3 text-xs">
               <div className="flex justify-between gap-3">
                 <span className="text-slate-400">Estimated USDC withdrawal</span>
@@ -375,6 +428,9 @@ export default function LPDashboard() {
               type="submit"
               disabled={
                 isWithdrawing ||
+                isWithdrawSimulating ||
+                !!withdrawSimError ||
+                !withdrawSimDetails ||
                 !position?.shares ||
                 previewShares <= 0n ||
                 exceedsPosition ||
