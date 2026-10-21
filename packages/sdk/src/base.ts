@@ -64,6 +64,18 @@ const signTransactionCompat = signTransactionFn as (
 ) => Promise<string>;
 
 const MAX_TRANSACTION_POLL_ATTEMPTS = 30;
+const activeWrites = new Set<string>();
+
+/** Thrown when the same contract action is already awaiting confirmation. */
+export class TransactionInProgressError extends Error {
+  readonly method: string;
+
+  constructor(method: string) {
+    super(`A transaction for ${method} is already in progress`);
+    this.name = "TransactionInProgressError";
+    this.method = method;
+  }
+}
 
 export class TransactionTimeoutError extends Error {
   readonly txHash: string;
@@ -297,6 +309,26 @@ export class BaseContractClient {
   }
 
   private async writeContractDetailed(
+    method: string,
+    args: xdr.ScVal[],
+    publicKey: string,
+  ): Promise<Extract<TransactionSubmissionResult, { status: "SUCCESS" }>> {
+    const writeKey = `${this.contractId}:${publicKey}:${method}`;
+    if (activeWrites.has(writeKey)) {
+      throw new TransactionInProgressError(method);
+    }
+
+    activeWrites.add(writeKey);
+    try {
+      return await this.performWriteContractDetailed(method, args, publicKey);
+    } finally {
+      // Release after success, rejection, RPC failure, or timeout so a retry
+      // is possible once this submission has reached a terminal state.
+      activeWrites.delete(writeKey);
+    }
+  }
+
+  private async performWriteContractDetailed(
     method: string,
     args: xdr.ScVal[],
     publicKey: string,
